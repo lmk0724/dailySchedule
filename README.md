@@ -113,3 +113,82 @@ pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
 }
 ```
 
+### 7.8
+
+今天继续阅读第四章的文档，也就是lab2的文档。相比于lab1的文档，这次阅读文档不太顺利，原因是我之前对于页表的理解有些问题。
+
+我之前一直以为多级页表中每个节点的每一项都是分为两个部分，虚拟页号和物理帧号，但是这里有问题，页表项不需要留出空间给虚拟页号。因为处理的时候会将物理帧按照数组组织，下标即为虚拟页号。那么就不需要再页表项中预留空间存虚拟页号了。
+
+然后读完了文档就开始写代码了，着手解决系统调用sys_get_time的系统调用。给出的提示是由于采用了虚拟内存，需要修改sys_get_time。那么需要修改的一项就是该系统调用传入的指针了，这个指针应该是虚拟地址，需要手动转化为物理地址。
+
+刚开始觉得系统调用是在内核态下执行的，所以觉得该虚拟地址是内核空间的，所以用内核内存空间转化了一下。代码如下：
+
+```rust
+// os/syscall/process.rs
+pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+    let _us = get_time_us();
+    let vaddr = _ts as usize;
+    let vaddr_obj = VirtAddr(vaddr);
+    let page_off = vaddr_obj.page_offset();
+
+    let vpn = vaddr_obj.floor();
+    
+    
+    let ppn = KERNEL_SPACE.lock().translate(vpn).unwrap().ppn();
+
+    let paddr : usize = ppn.0 << 10 | page_off;
+    let ts  = paddr as *mut TimeVal;
+    unsafe {
+        *ts = TimeVal {
+            sec: _us / 1_000_000,
+            usec: _us % 1_000_000,
+        };
+    }
+    0
+}
+```
+
+然后转念一想，这个地址是在用户程序中传入的，应该是用户程序的内核空间中的地址。然后使用用户空间翻译了一下
+
+```
+// os/syscall/process.rs
+pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+    let _us = get_time_us();
+    let vaddr = _ts as usize;
+    let vaddr_obj = VirtAddr(vaddr);
+    let page_off = vaddr_obj.page_offset();
+
+    let vpn = vaddr_obj.floor();
+    
+    let ppn = translate_vpn(vpn);
+
+    let paddr : usize = ppn.0 << 10 | page_off;
+    let ts  = paddr as *mut TimeVal;
+    unsafe {
+        *ts = TimeVal {
+            sec: _us / 1_000_000,
+            usec: _us % 1_000_000,
+        };
+    }
+    0
+}
+
+// os/task/mod.rs
+impl TaskManager {
+fn translate_vpn(&self, vpn: VirtPageNum)-> PhysPageNum{
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let CurrentAppSpace = &inner.tasks[current].memory_set;
+        let ppn = CurrentAppSpace.translate(vpn).unwrap().ppn();
+        return ppn;
+    }
+}
+
+
+pub fn translate_vpn(vpn: VirtPageNum)-> PhysPageNum{
+    TASK_MANAGER.translate_vpn(vpn)
+}
+```
+
+但测试了一下，还是不行，这就有点儿费解了。
+
