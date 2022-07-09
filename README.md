@@ -192,3 +192,58 @@ pub fn translate_vpn(vpn: VirtPageNum)-> PhysPageNum{
 
 但测试了一下，还是不行，这就有点儿费解了。
 
+7.9
+
+今天继续debug，想一想为什么sys_get_time不行，答案找到了，找到了两个错误的地方，一是我将ppn左移10位了，这显然是不对的，page的大小为4k。需要左移12位。二是我之前觉得调用系统调用的时候CPU执行的任务发生了改变，因此构造了一个last_task的属性，但是经过思考之后发现，系统调用还是处于当前的任务之中，不过是将CPU的主导权放到了内核态中。
+
+然后就继续修改sys_task_info这个系统调用。这个系统调用还是同样的思路，通过查页表找到对应的物理的地址，然后进行写入，这里直接把实验一的代码搬过来即可。
+
+但是在实现的时候发现一个问题，本实验TaskStatus的定义和实验一不同，没有Uninit状态，因此我就不能用之前的方式来设置任务的启动时间了，仅仅是在TASK_MANAGER初始化的时候调用get_time()作为任务的启动时间。然后调用sys_task_info时候获得的时间get_time()减去这个时间即可得到任务的运行时间，但是我在测试的时候发现这个运行时间不太准，比较随机，有时候是480ms左右，有时候是490ms左右，有时候是502ms左右，但是只有在500ms左右的时候才能通过测试。这就不清楚为什么会出现这种情况了。
+
+并且由于TaskStatus定义的不同，会造成一个奇怪的现象，TaskStatus::Running != TaskStatus::Running。需要在本实验TaskStatus的定义中加入Uninit状态，才可以通过这一项测试。
+
+然后就是实现 sys_mmap了，这里一个坑点是文档中提示的“可能的错误”，被我理解成了以往的参与者会犯的错误，没想到是这个函数包含的错误的情况，也就是说碰到这些情况时，系统调用需要返回-1.
+
+实现这个系统调用最伤脑经的是判断一个虚拟页号是否已经有映射了，这里的函数调用比较复杂，sys_mmap()$\rightarrow$contains_key()$\rightarrow$ task_manager.contains_key()  $\rightarrow$memoryset.contains_key() $\rightarrow$MapArea.contains_key()。
+
+```rust
+// os/src/task/mod.rs
+pub fn contains_key(vpn: &VirtPageNum)-> bool{
+    TASK_MANAGER.contains_key(vpn)
+}
+impl TaskManager{
+    fn contains_key(&self, vpn: &VirtPageNum)-> bool{
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.contains_key(vpn)
+	}
+}
+
+// os/src/mm/memeory_set.rs
+impl MemorySet{
+    pub fn contains_key(&self, vpn: &VirtPageNum) -> bool{
+        let mut result = false;
+        let l = self.areas.len();
+        for i in 0..l{
+            let res = self.areas[i].contains_key(vpn);
+            result = result | res;
+        }
+        return result;
+    }
+}
+impl MapArea{
+    pub fn contains_key(&self, vpn: &VirtPageNum)-> bool{
+        self.data_frames.contains_key(vpn)
+    }
+}
+
+```
+
+在进行上面的判断之后，就可以执行添加操作了，这里直接利用框架代码，提供的memory_set.insert_framed_area()函数。
+
+最后就是sys_munmap的实现了。还是先利用上面实现的功能判断给定的虚拟页空间，是否存在没有映射的页。如果存在，则直接返回-1. 反之，进行这块虚拟页空间的释放。这里涉及到两个结构的更新，一是Vec\<MapArea\>，二是PageTable的更新。这里利用pageTable提供的unmap函数即可。
+
+最后就是今天编程的一点儿体会，发现我的rust编程还是没有登堂入室，时常会犯一些错误，比如没有加mut，不知道vec.iter()会转移所有权等等，只能指望编译器给我指出这些错误。
+
+
+
