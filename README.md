@@ -204,7 +204,7 @@ pub fn translate_vpn(vpn: VirtPageNum)-> PhysPageNum{
 
 然后就是实现 sys_mmap了，这里一个坑点是文档中提示的“可能的错误”，被我理解成了以往的参与者会犯的错误，没想到是这个函数包含的错误的情况，也就是说碰到这些情况时，系统调用需要返回-1.
 
-实现这个系统调用最伤脑经的是判断一个虚拟页号是否已经有映射了，这里的函数调用比较复杂，sys_mmap()$\rightarrow$contains_key()$\rightarrow$ task_manager.contains_key()  $\rightarrow$memoryset.contains_key() $\rightarrow$MapArea.contains_key()。
+实现这个系统调用最伤脑经的是判断一个虚拟页号是否已经有映射了，这里的函数调用比较复杂，$sys\_mmap()\rightarrow contains\_key() \rightarrow  task\_manager.contains\_key()  \rightarrow memoryset.contains\_key() \rightarrow MapArea.contains\_key()$。
 
 ```rust
 // os/src/task/mod.rs
@@ -270,5 +270,7 @@ pub fn contains_key(&self, vpn: &VirtPageNum)-> bool{
 
 但是奇怪的是，我把这一版上传到云端，云端居然测试通过了，这实在是很神奇。
 
+### 7.11
 
+今天主要是读第五章的文档。
 
