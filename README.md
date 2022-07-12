@@ -274,3 +274,18 @@ pub fn contains_key(&self, vpn: &VirtPageNum)-> bool{
 
 今天主要是读第五章的文档。
 
+### 7.12
+
+今天开始尝试编写代码，尝试着把sys_get_time, sys_task_info, spawn这几个系统调用，spawn这个系统调用可以简单的看作fork和exec的结合。不过是不需要拷贝父进程的地址空间了，直接指定elf获得的地址空间。
+
+sys_get_time和sys_task_info这两个系统调用需要修改，这个实验的结构又有了大变，没有了全局的TASK_MANAGER，因此这次需要在全局的PROCESSOR上进行操作。
+
+稍微看了看sys_set_priority，仅仅实现这个系统调用就可以了吗？框架中实现了stride算法的后续步骤了吗，我们需要实现后续的代码吗？
+
+在make test5的时候发现程序一直卡在chapter 5的一个测试set_priority，卡一段时间，然后测试就退出了，连我写好的系统调用也没有进行测试。
+
+![image-20220712221904312](pic/image-20220712221904312.png)
+
+![image-20220712221947491](pic/image-20220712221947491.png)
+
+如图所示的情况，可以看到APPS还有很多，usertests没有完全加载完，qemu模拟器就退出了。
