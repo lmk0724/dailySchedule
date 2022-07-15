@@ -376,6 +376,18 @@ let difference = (t - min_stride) as isize;
 
 后来又试了一下u16，u32，都不可以。搞不清楚是为什么。
 
+### 7.15
+
+今天看了第六章的文档。这个文档比较复杂。
+
+有一些混淆的地方。
+
+* 文件和目录，文档中将文件和目录写成了同一层次的东西。但通过看代码得知，获取文件内容的流程是，给定文件名，根据文件名去找DirEntry，根据DirEntry里面的inode_number解析出文件inode所在的blockid和offset.通过文件的inode获取文件的内容。因此逻辑结构上，目录是在文件之上的。
+* DirEntry的inode_number和blockid混淆了。因为文档中指定一个物理block中存四个inode，因此上DirEntry给一个blockid是无法唯一指定inode的，并且结合代码得知inode_number是由blockid和offset构成的。
+* Super Block与ROOT_INODE混淆了，Super Block是磁盘的第一个块，记录了磁盘的相关划分信息。而ROOT_INODE是根目录的Inode，包含了根目录包含的DirEntry所在的物理块的blockid。我们在实现系统调用的时候，所有的操作都要基于ROOT_INODE来进行操作，从他这里获取到文件的inode，进而获取文件的内容。
+* DiskInode，Inode和OSInode混淆了，这三个是逐步升级的封装。DiskInode就是最基本的文件inode，包含了文件内容所在的数据块的索引。至于其他两个的作用，目前还不清楚。
+* DiskInode和block混淆了，据文档所说，一个物理block（512B)上面有4个DiskInode(128B)。
+
 
 
 
