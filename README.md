@@ -387,10 +387,152 @@ let difference = (t - min_stride) as isize;
 * Super Block与ROOT_INODE混淆了，Super Block是磁盘的第一个块，记录了磁盘的相关划分信息。而ROOT_INODE是根目录的Inode，包含了根目录包含的DirEntry所在的物理块的blockid。我们在实现系统调用的时候，所有的操作都要基于ROOT_INODE来进行操作，从他这里获取到文件的inode，进而获取文件的内容。
 * DiskInode，Inode和OSInode混淆了，这三个是逐步升级的封装。DiskInode就是最基本的文件inode，包含了文件内容所在的数据块的索引。至于其他两个的作用，目前还不清楚。
 * DiskInode和block混淆了，据文档所说，一个物理block（512B)上面有4个DiskInode(128B)。
+* 和DiskInode相关的两个offset混淆，一个offset是用于指明当前DiskInode所在的block的位置的，毕竟一个block可以容纳4个DiskInode。另一个和diskInode相关的offset则是读取DiskInode关联的数据块中的数据时的offset，文件系统实现的时候将inode和数据节点的区别隐藏了，在inode节点上调用的read方法返回的就是该inode节点关联的数据节点上的数据。处理的时候将这些数据视为一个数组，即读取的时候需要不断地指定offset，直到读取完数据。
+* 将逻辑上文件与目录的依赖关系和具体实践上文件和目录的独立混淆了。逻辑上的话，文件系统就是一棵树，树的叶子节点就是文件。非叶节点就是目录。因此从逻辑上来讲目录是依赖于文件而存在的，文件依赖着目录的索引功能。但是在实践上，这两种结构就是完全独立的，一个文件，具体实现起来的话，是inode+数据节点的结构。而一个目录，实现起来的话，也是inode+数据节点的结构。不同的是文件的数据节点中的数据是没有特定结构的二进制数据，而目录的数据节点中存储的是目录项，由名称和inode_number组成。那么这就有问题了，在目录与文件独立的实现结构下，如何实现文件的索引呢？答案就是目录项的inode_number，他是目录项名字对应的inode，无论是文件也好，还是下一级目录也好，获得这个inode_number就可以进行迭代的索引了，直到索引到想要的文件为止。
 
 
 
+### 7.16
 
+今天主要是写代码了，昨天写完了以往实验中的系统调用，今天主要是着重在与文件系统相关的三个系统调用。sys_linkat，sys_unlinkat，sys_fstat。
 
+刚开始的时候完全是懵的，sys_linkat完全不知道怎么实现，主要是我没有对文档理解透彻。比如把逻辑上文件系统的结构带进去了，因为逻辑上，文件系统是一个树的形式，树的每一个节点就是一个inode，那么sys_linkat的实现，岂不是要在ROOT_INODE上面加一个inode。可是问题又来了，这个硬链接是一个inode嘛？inode对应的数据节点里面存什么东西呢？
 
+上面纯粹就是理解混了。ROOT_INODE是一个目录，他有配套的inode+数据节点。inode用于索引数据节点，而数据节点中存的是一个个的目录项。这些目录项由名字和inode_number组成，inode_number用于索引inode。如此便可以不断索引下去，直到遇到文件的inode，读取文件内容即可。
+
+想明白这个，sys_linkat的思路也就出来了，就是在ROOT_INODE下面新建一个目录项，目录项的名字是给定的_new_name，目录项的inode\_number和\_old\_name对应的目录项一样的。
+
+```rust
+pub fn create_hard_link(&self, o_name: &str, n_name: &str) -> isize {  
+        if o_name == n_name {
+            return -1;
+        }
+        if let Some(inode_number) =
+            self.read_disk_inode(|disk_inode| self.find_inode_id(o_name, disk_inode))
+        {
+            let mut fs = self.fs.lock();
+            self.modify_disk_inode(|root_inode| {
+                // append file in the dirent
+                let file_count = (root_inode.size as usize) / DIRENT_SZ;
+                let new_size = (file_count + 1) * DIRENT_SZ;
+                // increase size
+                self.increase_size(new_size as u32, root_inode, &mut fs);
+                // write dirent
+                let dirent = DirEntry::new(n_name, inode_number);
+                root_inode.write_at(
+                    file_count * DIRENT_SZ,
+                    dirent.as_bytes(),
+                    &self.block_device,
+                );
+            });
+            return 0;
+        } else {
+            return -1;
+        }
+        
+    }
+```
+
+实现了这个之后，遇到一个意想不到的问题。怎么把系统调用的参数* const u8转换为&str呢？
+
+通过查阅资料，得知了* const u8这种类型称为ptr，并且这种类型无法通过index索引。将其转化为&str的方法如下:
+
+```rust
+     unsafe {
+             let mut _end = _name;
+             while _end.read_volatile() != 0u8 {
+                 _end = _end.add(1);
+             }
+             let _slice = core::slice::from_raw_parts(_name, _end as usize - _name as usize);
+             let name = core::str::from_utf8(_slice).unwrap();
+         }
+```
+
+先将其转为slice，而后转为&str。
+
+但是通过阅读框架代码，发现框架提供了一种翻译的方法:smile:
+
+然后就是sys_unlinkat，解除硬链接方法。也就是将目录项删除即可，但是还需要注意一种特殊情况。提供的名字是文件inode的唯一索引，这时候就需要将文件删除。
+
+这里需要实现一个根据inode_number获取索引次数的方法，大概的思路就是对root_inode下面的目录项一个个读取，如果inode_number与给定的吻合，累计次数加一即可。
+
+```rust
+pub fn get_inode_number_times(&self, inode_number: u32) -> usize{
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let mut res = 0;
+            for i in 0..file_count {
+                let mut dirent = DirEntry::empty();
+                assert_eq!(
+                    disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
+                );
+                if dirent.inode_number() == inode_number{
+                    res += 1;
+                }
+            }
+            res
+        })
+    }
+```
+
+实现了这个之后，接下来就是删除目录项的功能了，我这里实现的时候就按最简单的实现了。直接将该目录项所在的位置重写成一个空的目录项。当然也可以更复杂一点儿的，该目录项后面的元素直接向前覆盖一个单位就行。
+
+```rust
+self.modify_disk_inode(|disk_inode| {
+                    // append file in the dirent
+                    let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+                    let mut dirent = DirEntry::empty();
+                    for i in 0..file_count {
+                        assert_eq!(
+                            disk_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(),&self.block_device,),
+                            DIRENT_SZ,
+                        );
+                        if dirent.name() == name {
+                            let dirent = DirEntry::empty();
+                            disk_inode.write_at(
+                                DIRENT_SZ * i,
+                                dirent.as_bytes(),
+                                &self.block_device,
+                            );
+                        }
+                    }
+                    
+                });
+```
+
+最后就是文件状态的系统调用了，这个最麻烦，主要是我刚开始不知道通过_fd获得的文件描述符怎么处理。折腾了好久，终于发现了打开文件之后，向文件描述符表中，存的是OSInode类型的数据，那么向File trait添加get_inode_number，get_type方法即可。让OSInode实现就行。
+
+```rust
+fn get_inode_number(&self) -> usize {
+        let mut inner = self.inner.exclusive_access();
+        return inner.inode.get_inode_number();
+
+    }
+    fn get_type(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        return inner.inode.get_inode_type()
+    }
+```
+
+这里获取inode_number需要从blockid和blockoffset还原出来inode_number。
+
+```rust
+pub fn get_inode_number(&self) -> usize{
+        let inode_size = core::mem::size_of::<DiskInode>();
+        let inodes_per_block = (BLOCK_SZ / inode_size) as u32;
+        let tem1 = self.block_id - self.fs.lock().inode_area_start_block as usize;
+        
+        return tem1 * (inodes_per_block as usize) + self.block_offset/inode_size
+    }
+```
+
+这个代码是从easyFileSystem的一个方法中，逆写出来的。
+
+实现中一些值得注意的问题。
+
+* os6/src/syscall/process.rs中第三行use core::slice::SlicePattern，这一行会报错，需要注释掉才可以正常运行。
+* ![image-20220716191006000](pic/image-20220716191006000.png)
+* 图中的drop(inner)十分重要，需要手动释放掉资源。后面的translate方法也需要inner这个资源。
 
