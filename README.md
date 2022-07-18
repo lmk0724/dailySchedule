@@ -536,3 +536,7 @@ pub fn get_inode_number(&self) -> usize{
 * ![image-20220716191006000](pic/image-20220716191006000.png)
 * 图中的drop(inner)十分重要，需要手动释放掉资源。后面的translate方法也需要inner这个资源。
 
+### 7.17-7.18
+
+这两天有事情，耽搁了一下。
+
