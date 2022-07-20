@@ -561,3 +561,30 @@ pub fn get_inode_number(&self) -> usize{
 现在卡在如何获取allocate vectors和needed vectors这两个信息。想的是在semphore up和down的时间进行更新有关的数据结构。但是semphore的up和down方法，仅仅可以获取到当前线程的tid，但是无法获取到semphore是哪个互斥资源，换句话说，在进程的互斥资源列表中，当前的semphore的下标是什么？
 
 并且还不清楚allocate vectors和needed vectors这两个信息保存在哪里？是保存在线程中呢？还是保存在semphore中呢？
+
+### 7.20
+
+今天继续写代码，刚开始还是为allocate vectors和needed vectors这两个信息保存在哪里而迷茫，直到看到了sys_thread_create这个系统调用，明白了process中的线程列表是按照tid来组织的，中间可以有None的位置，而不是那种随便组织的，新建一个线程，直接把线程控制块push到线程列表中的形式。
+
+这样的话，将allocate vectors和needed vectors这两个信息保存在semphore/Mutex中的话，就很方便处理了。semphore/mutex中的等待队列可以作为needed vectors，至于allocate vectors和work vectors就需要额外实现方法了，work vectors就是当前semphore/mutex返回可用的互斥资源数目。实现一个get_count方法即可，在mutex中，该方法仅仅能返回0或1. allocate vectors在semphore中需要额外新建一个属性，allocate_queue，用于记录该互斥资源的分配情况。
+
+![image-20220720215215896](pic/image-20220720215215896.png)
+
+上面图片中的三个方法，mutex和semaphore都会实现，分别是获取该信号量/互斥锁的可用资源，分配给各个线程的情况，各个线程的等待情况。也就是work, allocate, need三个信息。
+
+这一部分写完之后，开始进行死锁检测算法的实现。此处实现的时候发现了一个点，当调用死锁检测算法的时候，意味着有线程调用sem_down/lock方法，但是此时该线程还没有添加到sem/mutex的等待队列中，也就是如果仅仅是get_waiting_tids的话，就会缺少此次调用线程的需求信息。因此需要特别设置一下：
+
+```rust
+let c_task = current_task().unwrap();
+let current_task_inner = c_task.inner_exclusive_access();
+let current_task_res = current_task_inner.res.as_ref().unwrap();
+let c_tid = current_task_res.tid;
+Need[id][c_tid] += 1;
+```
+
+除此之外，还有一件很有意思的事情，文档中说，如果死锁检测算法没有通过，就要返回-0xDEAD值。我一开始误以为是在semaphore/mutex的down/lock方法中修改，直接把方法的签名给改了，原来没有返回值，改成了isize的返回值。后来才发现，需要在syscall里面有关的sem_down系统调用中修改。
+
+经过一天的努力，29个测例通过了28个。
+
+![image-20220720220606838](pic/image-20220720220606838.png)
+
