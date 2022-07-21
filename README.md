@@ -562,11 +562,15 @@ pub fn get_inode_number(&self) -> usize{
 
 并且还不清楚allocate vectors和needed vectors这两个信息保存在哪里？是保存在线程中呢？还是保存在semphore中呢？
 
+尝试了一下将allocate vectors和needed vectors这两个信息保存在线程控制块中，用的是hashmap存储的，结果我忘了我现在是在一个裸操作系统上编码，没有std的支持，然后就放弃了。并且这种hashmap存储也比较麻烦，键是arc\<Semaphore/Mutex\>，那么处理的时候就比较麻烦，还需要将键转为process的互斥资源的下标。很麻烦，所以就放弃了。
+
 ### 7.20
 
 今天继续写代码，刚开始还是为allocate vectors和needed vectors这两个信息保存在哪里而迷茫，直到看到了sys_thread_create这个系统调用，明白了process中的线程列表是按照tid来组织的，中间可以有None的位置，而不是那种随便组织的，新建一个线程，直接把线程控制块push到线程列表中的形式。
 
-这样的话，将allocate vectors和needed vectors这两个信息保存在semphore/Mutex中的话，就很方便处理了。semphore/mutex中的等待队列可以作为needed vectors，至于allocate vectors和work vectors就需要额外实现方法了，work vectors就是当前semphore/mutex返回可用的互斥资源数目。实现一个get_count方法即可，在mutex中，该方法仅仅能返回0或1. allocate vectors在semphore中需要额外新建一个属性，allocate_queue，用于记录该互斥资源的分配情况。
+这样的话，将allocate vectors和needed vectors这两个信息保存在semphore/Mutex中的话，就很方便处理了。这个是从mutex/semaphore的等待队列获取的灵感，等待队列完全可以等价于need信息，那么仅仅需要保存一个已经分配的信号量的线程列表即可。
+
+semphore/mutex中的等待队列可以作为needed vectors，至于allocate vectors和work vectors就需要额外实现方法了，work vectors就是当前semphore/mutex返回可用的互斥资源数目。实现一个get_count方法即可，在mutex中，该方法仅仅能返回0或1. allocate vectors在semphore中需要额外新建一个属性，allocate_queue，用于记录该互斥资源的分配情况。
 
 ![image-20220720215215896](pic/image-20220720215215896.png)
 
@@ -587,4 +591,76 @@ Need[id][c_tid] += 1;
 经过一天的努力，29个测例通过了28个。
 
 ![image-20220720220606838](pic/image-20220720220606838.png)
+
+### 7.21
+
+今天继续debug，为什么测例ch8_deadlock_sem1.rs无法通过。通过阅读代码发现了ch8_deadlock_sem1.rs的逻辑是：新建三个线程，分别申请三个初值为1,2,1的互斥资源，线程一申请了0,1,0，线程二申请了1,1,0,线程三申请了0,0,1。这个申请资源同时完成之后，后面他们再申请资源的时候就会检测到死锁。但是如果考虑到线程调度的话，比如：线程一先执行，线程一执行完了，线程二执行，而后线程三执行。这样的话，就不会出现死锁。每次申请资源都可以成功。
+
+并且发现在每个线程执行的函数deadlock_test中添加一个sleep函数，测例就可以顺利通过。
+
+![image-20220721102901783](pic/image-20220721102901783.png)
+
+如上图所示，在线程一二三的第一次申请资源和第二次申请资源之间执行sleep(100)操作。让出CPU，这样的话测例就可顺利通过。
+
+![image-20220721103417793](pic/image-20220721103417793.png)
+
+所以我在调试的过程中突然出现了一次29/29的情况，但是再运行的话，还是28/29的情况。然后就提了一个issue。
+
+除此之外，还发现了一些其他的小问题。
+
+![image-20220721102334548](pic/image-20220721102334548.png)
+
+上图是semaphore的up函数，红框圈出来的地方，就是一些小bug。第一个小bug是由于semaphore的灵活性，up函数可能有两个语义，一是归还资源，二是仅仅是增加一个资源，之前没有占有资源。所以进行第一个红框的判断是必要的，判断它之前是否占有了资源。进而推断出此次up函数的意图。
+
+第二个bug是由于current_task_inner这个互斥资源，下面可能会再次调用，所以需要手动释放。
+
+然后还意识到一个问题，当线程不正常退出之后，他的互斥资源的回收也是需要考虑的。不过实验八的测例貌似没有检测这方面的问题。
+
+然后总觉得改测例总是不太好，然后就继续研究哪里出现了问题。
+
+然后看了看别人实现的代码，发现其他人实现的和我思路一样，但是work，allocated，need这几个信息存储的地方和我的不一样。他们是在process进程中存储的，存储了几个vec，而我是分散存的，每个semaphore存了与这个信号量相关的allocated和waiting信息。
+
+并且发现别人实现的版本，不给测例加sleep也可以正常的通过。
+
+然后仔细观察了这两个版本的输出。
+
+![1](pic/1.jpg)
+
+上图是测例中每个线程运行的函数，给其加了一些断点。
+
+然后别人实现的版本如下：
+
+![2](pic/2.jpg)
+
+自己的版本如下：
+
+![3](pic/3.jpg)
+
+![4](pic/4.jpg)
+
+![5](pic/5.jpg)
+
+可以看到我的版本三个线程运行是线性的，而别人的版本三个线程先并行的实现第一阶段的资源分配，而后进行第二阶段的资源分配。
+
+然后比较到此为止，找不到bug，就计划按照他那种写法重新写一下。
+
+结果在写代码的过程中发现了自己代码的几个问题，修改了之后就成功运行了！！！！
+
+几个bug如下：
+
+第一个bug是获取当前信号量剩余的互斥资源的个数。
+
+![image-20220721212850007](pic/image-20220721212850007.png)
+
+由于semaphore down函数实现的特殊性，无论合法不合法，inner.count都会先减一，那么count显然不能代表互斥资源的个数了。因此需要做一些变化。
+
+![image-20220721213312695](pic/image-20220721213312695.png)
+
+当inner.count小于0的时候，返回0.
+
+第二个bug是在process的deadlock_detection函数中，由于这个函数有两个分支，因此第二个分支的semaphore检测就是copy的上一个mutex分支的代码，因此就是这个copy出现了一些问题，将l_mutex_len 复制过来了，没有变。
+
+第三个bug还是在process中的deadlock_detection中，仅仅是把while写成了if。
+
+全部修改就可以全部通过测例了。
 
