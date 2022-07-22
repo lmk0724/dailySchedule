@@ -204,7 +204,9 @@ pub fn translate_vpn(vpn: VirtPageNum)-> PhysPageNum{
 
 然后就是实现 sys_mmap了，这里一个坑点是文档中提示的“可能的错误”，被我理解成了以往的参与者会犯的错误，没想到是这个函数包含的错误的情况，也就是说碰到这些情况时，系统调用需要返回-1.
 
-实现这个系统调用最伤脑经的是判断一个虚拟页号是否已经有映射了，这里的函数调用比较复杂，$sys\_mmap()\rightarrow contains\_key() \rightarrow  task\_manager.contains\_key()  \rightarrow memoryset.contains\_key() \rightarrow MapArea.contains\_key()$。
+实现这个系统调用最伤脑筋的是判断一个虚拟页号是否已经有映射了，这里的函数调用比较复杂，
+
+$sys\_mmap()\rightarrow contains\_key() \rightarrow  task\_manager.contains\_key()  \rightarrow memoryset.contains\_key() \rightarrow MapArea.contains\_key()$。
 
 ```rust
 // os/src/task/mod.rs
@@ -664,3 +666,6 @@ Need[id][c_tid] += 1;
 
 全部修改就可以全部通过测例了。
 
+### 7.22
+
+今天尝试写了一下lab1的报告。
