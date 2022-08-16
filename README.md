@@ -790,3 +790,67 @@ Need[id][c_tid] += 1;
 
 今天把第一章，三叶虫那一章给走完了。学到了很多第一阶段忽略的知识点。
 
+### 8.16
+
+今天开始实践第二章，批处理系统。
+
+忙了很长一段时间的用户程序实现。
+
+首先是user目录应该也是一个cargo项目，和内核os目录应该怎么组织呢？这是第一个问题。我直接采用了与os目录平行的目录下新建一个user项目。
+
+第二个问题是如何理解user项目下的几个文件。
+
+```src/console.rs```文件实现了输出函数，基于```src/syscall.rs```实现的。将与输出相关的函数都归到了这个文件中。
+
+```src/syscall.rs``` 文件中声明了许多系统调用。
+
+```src/lib.rs```文件中将syscall中的系统调用封装成了函数；实现了一些syscall文件中用到的结构体；还实现了user项目的入口函数。user项目先进入lib.rs的入口函数，经过处理之后，进入每个用户函数的main函数进行执行。
+
+```src/lang_items.rs``` 文件提供了panic_handler功能。
+
+第三个问题是如何编译出用户程序。通过查看原项目的makefile文件。
+
+```
+cargo rustc --bin ch2b_power_3 --release -- -Clink-args=-Ttext=0x80400000
+```
+
+
+
+在实现用户程序的时候，有下面一个问题
+
+* 用户程序user里面也有系统调用的实现，这个和内核中系统调用的实现有何区别？
+
+答案是，用户程序中的系统调用仅仅是向寄存器中传了个参数。并没有实际的处理。而内核中的syscall模块，没有传参部分，syscall的分发函数syscall的函数签名直接就是有参数的。直接进行处理，依靠着内核中实现的结构体的功能来实现具体的逻辑。因此syscall可以分为两部分，第一部分传参到寄存器，第二部分，拿到参数进行处理。
+
+接着就是实现内核。
+
+实现内核时候，对于如何链接应用程序到内核，还花了很长时间来研究。
+
+关键是os根目录下的build.rs，这个build.rs动态生成link_app.S文件，需要注意的是这个文件的运行时机，是在cargo build的时候运行的。
+
+在实现的过程中，突然有一种想要总结一下内核中的结构体，全局变量，常量，函数各自的“边界”。
+
+#### 结构体
+
+* UPSafeCell，特殊用途，用于包裹一个互斥资源。与内核的逻辑没有关系。
+* TrapContex，抽象出用户上下文，用于Trap处理。其中还解决了我的一个疑惑，一个变量怎么能绑定到一个寄存器呢？对此暂时的答案是利用了riscv这个库实现的。
+* AppManager，应用程序管理器。保存应用程序的信息，加载应用程序。
+* KernelStack
+* UserStack，其实应该一个应用程序一个UserStack，一个KernelStack的，但是批处理系统不会同时运行多个程序，是一个一个运行的，所以仅仅需要一个用户栈，一个内核栈。
+
+#### 函数
+
+* syscall模块中的函数，分为两类，syscall函数用于分发syscall，另一部分是具体的处理函数。为了实现具体的功能，需要依赖于结构体及其方法。
+* trap/init函数，实现了trap处理的初始化，将trap处理的地址赋到具体的寄存器上面。
+* trap/trap_handler函数，实现了trap处理的分发。这里的有一个分支是关于syscall的，实现的功能是从寄存器中获取参数，然后进行处理。
+* batch/init，batch/print_app_info函数，依赖于APP_MANAGER这个全局变量。
+* batch/run_next_app，依赖于APP_MANAGER这个全局变量和AppManager这个结构体。
+* main/clear_bss。
+
+#### 全局变量
+
+* APP_MANAGER，应用管理器。
+* SYSCALL_*，系统调用的序号
+* USER_STACK_SIZE，KERNEL_STACK_SIZE，内核的配置变量。
+* MAX_APP_NUM，APP_BASE_ADDRESS，APP_SIZE_LIMIT，内核的配置变量。
+
