@@ -854,3 +854,11 @@ cargo rustc --bin ch2b_power_3 --release -- -Clink-args=-Ttext=0x80400000
 * USER_STACK_SIZE，KERNEL_STACK_SIZE，内核的配置变量。
 * MAX_APP_NUM，APP_BASE_ADDRESS，APP_SIZE_LIMIT，内核的配置变量。
 
+### 8.17
+
+今天重点理解了一下之前不懂的地方。
+
+* 批处理系统与分时多任务系统的不同主要是，批处理系统是运行完一个再load一个，而分时多任务系统是一次load多个。load的话，就是从data数据段copy到执行的地址。
+* 操作系统初始化后如何运行第一个应用程序，采用了trap处理的后半段代码，__restore函数，所以需要在内核栈上需要压入一个Trap上下文
+* 操作系统trap处理与switch处理的区别，trap是从U态切换到S态，又从S态切换到U态。而switch是内核态的两个任务上下文的互换。
+* 分时多任务系统，也就是第三章的操作系统，在运行第一个程序的时候，需要显式的设置ra为$\_\_restore$函数的地址，但是在之后切换的时候没有显式的设置$\_\_restore$函数的值，这里的原因是在运行中的时候这里的switch处理是被包裹在Trap处理之中的，因此不需要显式设置。
