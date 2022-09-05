@@ -966,3 +966,42 @@ cargo rustc --bin ch2b_power_3 --release -- -Clink-args=-Ttext=0x80400000
 ### 8.30
 
 今天将第四章的文档看完了，看着文档大致把代码给写完了，明天看看能不能运行。
+
+### 8.31
+
+今天debug，虽然是可以成功编译了，但是无法成功运行。看起来似乎是在new_kernel的那部分，就会用完所有可供分配的物理帧。
+
+### 9.5
+
+今天继续debug，发现之前为什么new_kernel部分出问题了。
+
+自己初步梳理了一下new_kernel部分的逻辑。内核的地址空间push几个逻辑段$\rightarrow$ 逻辑段的对应关系需要更新在地址空间的页表上$\rightarrow$ 不存在的页表项需要frame allocator来分配物理帧。
+
+通过分析代码发现是代码中的vpn的indexes方法出问题了。
+
+```rust
+pub fn indexes(&self) -> [usize;3]{
+        let mut vpn = self.0;
+        let mut idx = [0usize;3];
+        for i in (0..3).rev(){
+            idx[i] = vpn & 511;
+            vpn >>= 9;
+        }
+        idx
+    }
+```
+
+出错的版本没有加rev()。因此求得的index是倒过来的。
+
+然后继续debug。发现run_first_task运行不成功。
+
+run_first_task的流程是，构造一个空的TaskContext$\rightarrow$调用switch函数，将要运行的TaskContext与之交换$\rightarrow$ 要运行的TaskContext中的ra为trap_return函数 $\rightarrow$ trap_return函数为调用restore函数做准备，并且调用restore函数$\rightarrow$ 调用restore函数返回用户态。
+
+从这个流程中排查问题，发现了问题在于我的alltraps和restore函数没有放到跳板页上面，需要将trap.S文件中的```.section .text```改为```.section .text.trampoline```。
+
+改完之后就可以正常运行了。运行结果如下：
+
+![image-20220905152003634](pic/image-20220905152003634.png)
+
+可以说初步完成了地址空间的抽象。
+
